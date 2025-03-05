@@ -396,7 +396,7 @@ class BcBsAlIntegration(Integration):
                         'Messages': row['Messages']
                     })
 
-        return df, insurance_info
+        return insurance_info
 
     @staticmethod
     def _create_soup(html):
