@@ -5,7 +5,6 @@ import pandas as pd
 from datetime import datetime
 from bs4 import BeautifulSoup, Tag
 from fake_useragent import UserAgent
-from helpers.tools import cookie_dict_to_string
 from submodule_integrations.models.integration import Integration
 from submodule_integrations.utils.errors import IntegrationAuthError, IntegrationAPIError
 
@@ -509,5 +508,5 @@ class BcBsAlIntegration(Integration):
                 integration_name="bcbsal",
                 status_code=400,
                 error_code="request_error",
-                message=cookie_dict_to_string(errors)
+                message=json.dumps(errors)
             )
