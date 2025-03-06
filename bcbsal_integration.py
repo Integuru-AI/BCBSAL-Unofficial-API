@@ -170,7 +170,7 @@ class BcBsAlIntegration(Integration):
         professional_office_coverage = self._parse_insurance_table(professional_office_element)
 
         # Switch to Diagnostics Lab page
-        update_path = self._get_element_data(selector="form#ebHeaderForm", key="action", soup=eligibility_soup)
+        update_path = self._get_element_data(selector="form#ebHeaderForm", key="action", soup=health_benefit_soup)
         update_data = {
             'submitType': '',
             'networkType': 'all',
