@@ -1,11 +1,11 @@
 import re
 import json
 import aiohttp
-from datetime import datetime
-
 import pandas as pd
+from datetime import datetime
 from bs4 import BeautifulSoup, Tag
 from fake_useragent import UserAgent
+from helpers.tools import cookie_dict_to_string
 from submodule_integrations.models.integration import Integration
 from submodule_integrations.utils.errors import IntegrationAuthError, IntegrationAPIError
 
@@ -152,6 +152,8 @@ class BcBsAlIntegration(Integration):
         headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 
         health_benefit_page = await self._make_request("POST", url=path, headers=headers, data=elig_data)
+        self._scan_form_errors(health_benefit_page)
+
         health_benefit_soup = self._create_soup(health_benefit_page)
         health_plan_element = health_benefit_soup.select_one("div#Covered-panel-1")
         health_plan_coverage = self._parse_insurance_table(health_plan_element)
@@ -166,11 +168,13 @@ class BcBsAlIntegration(Integration):
             'networkType': 'all',
             'selectedServiceOrDental': 'S',
             'serviceType': '5',
-            'dateOfService': f'{self.get_current_date_formatted()}',
+            'dateOfService': f'{self._get_current_date_formatted()}',
         }
         diagnostic_lab_page = await self._make_request(
             "POST", url=update_path, headers=headers, data=update_data
         )
+        self._scan_form_errors(diagnostic_lab_page)
+
         diagnostic_lab_soup = self._create_soup(diagnostic_lab_page)
         diagnostic_lab_element = diagnostic_lab_soup.select_one("div#Covered-panel-2")
         diagnostic_lab_coverage = self._parse_insurance_table(diagnostic_lab_element)
@@ -180,6 +184,8 @@ class BcBsAlIntegration(Integration):
         diagnostic_medical_page = await self._make_request(
             "POST", url=update_path, headers=headers, data=update_data
         )
+        self._scan_form_errors(diagnostic_medical_page)
+
         diagnostic_medical_soup = self._create_soup(diagnostic_medical_page)
         diagnostic_medical_element = diagnostic_medical_soup.select_one("div#Covered-panel-3")
         diagnostic_medical_coverage = self._parse_insurance_table(diagnostic_medical_element)
@@ -189,6 +195,8 @@ class BcBsAlIntegration(Integration):
         medical_care_page = await self._make_request(
             "POST", url=update_path, headers=headers, data=update_data
         )
+        self._scan_form_errors(medical_care_page)
+
         medical_care_soup = self._create_soup(medical_care_page)
         medical_care_element = medical_care_soup.select_one("div#Covered-panel-9")
         medical_care_coverage = self._parse_insurance_table(medical_care_element)
@@ -408,7 +416,7 @@ class BcBsAlIntegration(Integration):
         return input_item.get(key)
 
     @staticmethod
-    def get_current_date_formatted():
+    def _get_current_date_formatted():
         """
         Returns the current date in 'MM/DD/YYYY' format.
         """
@@ -444,3 +452,62 @@ class BcBsAlIntegration(Integration):
             return data
         except json.JSONDecodeError:
             return None
+
+    @staticmethod
+    def _scan_form_errors(html_content):
+        """
+        Scans the HTML content for form errors and returns a combined dictionary of all errors.
+
+        Args:
+            html_content (str): HTML content to scan
+
+        Returns:
+            dict: Dictionary of all errors found with field ID as key (general errors use 'general_error' keys)
+        """
+        # Parse the HTML content
+        soup = BeautifulSoup(html_content, 'html.parser')
+
+        # Dictionary to store all errors
+        errors = {}
+
+        # Find all error panels and extract general error messages
+        error_panels = soup.find_all(class_='panel-error')
+        general_error_counter = 0
+        for panel in error_panels:
+            error_text = panel.get_text(strip=True)
+            if error_text:
+                errors[f'general_error_{general_error_counter}'] = {
+                    'error_message': error_text,
+                    'error_type': 'general'
+                }
+                general_error_counter += 1
+
+        # Find all input fields with the 'error' class
+        error_inputs = soup.find_all('input', class_='error')
+
+        # Extract the field ID and error message (from title attribute)
+        for input_field in error_inputs:
+            field_id = input_field.get('id', 'unknown')
+            error_message = input_field.get('title')
+
+            # Skip fields with no error message
+            if error_message is None:
+                continue
+
+            current_value = input_field.get('value', '')
+            field_name = input_field.get('name', '')
+
+            errors[field_id] = {
+                'error_message': error_message,
+                'current_value': current_value,
+                'field_name': field_name,
+                'error_type': 'field'
+            }
+
+        if errors != {}:
+            raise IntegrationAPIError(
+                integration_name="bcbsal",
+                status_code=400,
+                error_code="request_error",
+                message=cookie_dict_to_string(errors)
+            )
