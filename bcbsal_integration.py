@@ -154,6 +154,15 @@ class BcBsAlIntegration(Integration):
         self._scan_form_errors(health_benefit_page)
 
         health_benefit_soup = self._create_soup(health_benefit_page)
+        bottom_content_tab = health_benefit_soup.select_one("div#ebBottomTabs")
+        if bottom_content_tab is None:
+            raise IntegrationAPIError(
+                integration_name="bcbsal",
+                error_code="server_error",
+                status_code=500,
+                message="Failed to load Coverage page content",
+            )
+
         health_plan_element = health_benefit_soup.select_one("div#Covered-panel-1")
         health_plan_coverage = self._parse_insurance_table(health_plan_element)
 
@@ -239,11 +248,16 @@ class BcBsAlIntegration(Integration):
         q0138_response: str = await self._make_request(
             "POST", url=search_form_path, headers=headers, data=q0138_data
         )
-        q0138_sect_start = q0138_response.find("outpatientSetting")
-        q0138_sect_end = q0138_response[q0138_sect_start:].find("cptCode")
-        q0138_sect = q0138_response[q0138_sect_start:q0138_sect_end+q0138_sect_start]
-        q0138_json = self._extract_script_json(q0138_sect)
-        q0138_message = q0138_json.get("outpatientMessage")
+        q0138_soup = self._create_soup(q0138_response)
+        unavailable_elem = q0138_soup.select_one("div#_precertification_WAR_paprecertificationportlet_ErrorDiv")
+        if unavailable_elem:
+            q0138_message = unavailable_elem.text.strip()
+        else:
+            q0138_sect_start = q0138_response.find("outpatientSetting")
+            q0138_sect_end = q0138_response[q0138_sect_start:].find("cptCode")
+            q0138_sect = q0138_response[q0138_sect_start:q0138_sect_end+q0138_sect_start]
+            q0138_json = self._extract_script_json(q0138_sect)
+            q0138_message = q0138_json.get("outpatientMessage")
 
         j1756_data = {
             'cptCodeDescription': 'Injection, Iron Sucrose, 1 mg',
@@ -253,11 +267,16 @@ class BcBsAlIntegration(Integration):
         j1756_response: str = await self._make_request(
             "POST", url=search_form_path, headers=headers, data=j1756_data
         )
-        j1756_sect_start = j1756_response.find("outpatientSetting")
-        j1756_sect_end = j1756_response[j1756_sect_start:].find("cptCode")
-        j1756_sect = j1756_response[j1756_sect_start:j1756_sect_end+j1756_sect_start]
-        j1756_json = self._extract_script_json(j1756_sect)
-        j1756_message = j1756_json.get("outpatientMessage")
+        j1756_soup = self._create_soup(j1756_response)
+        unavailable_elem = j1756_soup.select_one("div#_precertification_WAR_paprecertificationportlet_ErrorDiv")
+        if unavailable_elem:
+            j1756_message = unavailable_elem.text.strip()
+        else:
+            j1756_sect_start = j1756_response.find("outpatientSetting")
+            j1756_sect_end = j1756_response[j1756_sect_start:].find("cptCode")
+            j1756_sect = j1756_response[j1756_sect_start:j1756_sect_end+j1756_sect_start]
+            j1756_json = self._extract_script_json(j1756_sect)
+            j1756_message = j1756_json.get("outpatientMessage")
 
         result = {
             "q0138": q0138_message,
