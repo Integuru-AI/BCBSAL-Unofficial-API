@@ -96,7 +96,8 @@ class BcBsAlIntegration(Integration):
         return response
 
     async def get_coverage_data(
-            self, contract_id: str, first_name: str, last_name: str, mid_init: str, dob: str
+            self, contract_id: str, first_name: str, last_name: str, mid_init: str, dob: str,
+            pre_service_code: str = None
     ):
         elig_start_page = await self._get_eligibility_page()
         eligibility_soup = self._create_soup(elig_start_page)
@@ -212,7 +213,7 @@ class BcBsAlIntegration(Integration):
         iv_therapy_element = medical_care_soup.select_one("div#Covered-panel-12")
         iv_therapy_coverage = self._parse_insurance_table(iv_therapy_element)
 
-        preservice_data = await self._get_pre_service_data()
+        preservice_data = await self._get_pre_service_data(code=pre_service_code)
 
         coverage_data = {
             "health_benefit": health_plan_coverage,
@@ -229,7 +230,47 @@ class BcBsAlIntegration(Integration):
         }
         return result
 
-    async def _get_pre_service_data(self):
+    async def _get_cache_jwt(self):
+        params = {
+            'p_p_id': 'selector_WAR_paselectorportlet',
+            'p_p_lifecycle': '2',
+            'p_p_state': 'normal',
+            'p_p_mode': 'view',
+            'p_p_resource_id': 'generateBusinessToken',
+            'p_p_cacheability': 'cacheLevelPage',
+        }
+        path = f"{self.url}/portal/group/pa/utilization-review-physician"
+        headers = self.headers.copy()
+        headers["X-Requested-With"] = "XMLHttpRequest"
+        headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+
+        response = await self._make_request("POST", url=path, headers=headers, data=params)
+        return response
+
+    async def _get_pre_service_codes(self, jwt: str):
+        headers = self.headers.copy()
+        headers["X-Requested-With"] = "XMLHttpRequest"
+        headers["Content-Type"] = "application/json"
+        headers["Authorization"] = f"Bearer {jwt}"
+        headers["Accept"] = "application/json"
+
+        path = f"{self.url}/pa-medical-coding-ws/data/getAllActiveProcedureCodes"
+
+        response = await self._make_request("GET", url=path, headers=headers)
+        return response
+
+    async def _get_pre_service_data(self, code: str = None):
+        if code is None:
+            return None
+
+        code = code.upper()
+        jwt_token = await self._get_cache_jwt()
+        preservice_codes = await self._get_pre_service_codes(jwt_token)
+
+        code_data: dict = next((item for item in preservice_codes if item.get("code") == code), None)
+        if code_data is None:
+            return f"{code} not found in codes list"
+
         path = f"{self.url}/portal/group/pa/utilization-review-physician"
         headers = self.headers.copy()
         headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
@@ -241,46 +282,28 @@ class BcBsAlIntegration(Integration):
             selector="form#precertificationSearchForm", key="action", soup=pre_service_page_soup
         )
         q0138_data = {
-            'cptCodeDescription': 'Injection, Ferumoxytol, For Treatment of Iron Deficiency Anemia, 1 mg (Non-Esrd Use)',
-            'cptCodeType': 'HCPC',
-            'cptCode': 'Q0138',
+            'cptCodeDescription': f'{code_data.get("description")}',
+            'cptCodeType': f'{code_data.get("codeType")}',
+            'cptCode': f'{code}',
         }
-        q0138_response: str = await self._make_request(
+        code_response: str = await self._make_request(
             "POST", url=search_form_path, headers=headers, data=q0138_data
         )
-        q0138_soup = self._create_soup(q0138_response)
+        q0138_soup = self._create_soup(code_response)
         unavailable_elem = q0138_soup.select_one("div#_precertification_WAR_paprecertificationportlet_ErrorDiv")
         if unavailable_elem:
-            q0138_message = unavailable_elem.text.strip()
+            code_message = unavailable_elem.text.strip()
         else:
-            q0138_sect_start = q0138_response.find("outpatientSetting")
-            q0138_sect_end = q0138_response[q0138_sect_start:].find("cptCode")
-            q0138_sect = q0138_response[q0138_sect_start:q0138_sect_end+q0138_sect_start]
-            q0138_json = self._extract_script_json(q0138_sect)
-            q0138_message = q0138_json.get("outpatientMessage")
-
-        j1756_data = {
-            'cptCodeDescription': 'Injection, Iron Sucrose, 1 mg',
-            'cptCodeType': 'HCPC',
-            'cptCode': 'J1756',
-        }
-        j1756_response: str = await self._make_request(
-            "POST", url=search_form_path, headers=headers, data=j1756_data
-        )
-        j1756_soup = self._create_soup(j1756_response)
-        unavailable_elem = j1756_soup.select_one("div#_precertification_WAR_paprecertificationportlet_ErrorDiv")
-        if unavailable_elem:
-            j1756_message = unavailable_elem.text.strip()
-        else:
-            j1756_sect_start = j1756_response.find("outpatientSetting")
-            j1756_sect_end = j1756_response[j1756_sect_start:].find("cptCode")
-            j1756_sect = j1756_response[j1756_sect_start:j1756_sect_end+j1756_sect_start]
-            j1756_json = self._extract_script_json(j1756_sect)
-            j1756_message = j1756_json.get("outpatientMessage")
+            sect_start = code_response.find("outpatientSetting")
+            sect_end = code_response[sect_start:].find("cptCode")
+            section_str = code_response[sect_start:sect_end + sect_start]
+            section_json = self._extract_script_json(section_str)
+            code_message = section_json.get("outpatientMessage")
 
         result = {
-            "q0138": q0138_message,
-            "j1756": j1756_message,
+            "outpatient_data": code_message,
+            "description": code_data.get("description"),
+            "code": code,
         }
         return result
 
@@ -318,18 +341,21 @@ class BcBsAlIntegration(Integration):
             row_data = {}
 
             # Extract benefit info (first column)
-            benefit_info = row.find('span', class_='table-div EBInfoCd') or row.find('span', class_='table-div EBInfoCdbordertop')
+            benefit_info = row.find('span', class_='table-div EBInfoCd') or row.find('span',
+                                                                                     class_='table-div EBInfoCdbordertop')
             benefit_text = extract_text(benefit_info.find('div', class_='fonteb') if benefit_info else None)
 
             if benefit_text:
                 current_section = benefit_text
 
             # Extract network type (second column)
-            network_type = row.find('span', class_='table-div NetworkType') or row.find('span', class_='table-div NetworkTypebordertop')
+            network_type = row.find('span', class_='table-div NetworkType') or row.find('span',
+                                                                                        class_='table-div NetworkTypebordertop')
             network_text = extract_text(network_type.find('div', class_='fonteb') if network_type else None)
 
             # Extract coverage level (third column)
-            coverage_level = row.find('span', class_='table-div CovgLevelCd') or row.find('span', class_='table-div CovgLevelCdbordertop')
+            coverage_level = row.find('span', class_='table-div CovgLevelCd') or row.find('span',
+                                                                                          class_='table-div CovgLevelCdbordertop')
             coverage_text = extract_text(coverage_level.find('div', class_='fonteb') if coverage_level else None)
 
             if coverage_text:
@@ -344,15 +370,18 @@ class BcBsAlIntegration(Integration):
                         coverage_details.append(text)
 
             # Extract amount (fourth column)
-            amount = row.find('span', class_='table-div QtyQualCd') or row.find('span', class_='table-div QtyQualCdbordertop')
+            amount = row.find('span', class_='table-div QtyQualCd') or row.find('span',
+                                                                                class_='table-div QtyQualCdbordertop')
             amount_text = extract_text(amount.find('div', class_='fonteb') if amount else None)
 
             # Extract period/quantity (fifth column)
-            period = row.find('span', class_='table-div Quantity') or row.find('span', class_='table-div Quantitybordertop')
+            period = row.find('span', class_='table-div Quantity') or row.find('span',
+                                                                               class_='table-div Quantitybordertop')
             period_text = extract_text(period.find('div', class_='fonteb') if period else None)
 
             # Extract benefit date or additional info (sixth column)
-            precert = row.find('span', class_='table-div PrecertCd') or row.find('span', class_='table-div PrecertCdbordertop')
+            precert = row.find('span', class_='table-div PrecertCd') or row.find('span',
+                                                                                 class_='table-div PrecertCdbordertop')
             benefit_date = None
             if precert:
                 date_info = precert.find('div', string=lambda s: 'Benefit Begin' in s if s else False)
@@ -360,7 +389,8 @@ class BcBsAlIntegration(Integration):
                     benefit_date = date_info.get_text().strip()
 
             # Extract messages (last column)
-            messages = row.find('span', class_='table-div Messages') or row.find('span', class_='table-div Messagesbordertop')
+            messages = row.find('span', class_='table-div Messages') or row.find('span',
+                                                                                 class_='table-div Messagesbordertop')
             message_items = []
             if messages:
                 message_list = messages.find('ul', class_='fonteb')
