@@ -11,7 +11,7 @@ from submodule_integrations.utils.errors import IntegrationAuthError, Integratio
 
 class BcBsAlIntegration(Integration):
     def __init__(self, user_agent: str = UserAgent().random):
-        super().__init__("service_titan")
+        super().__init__("bcbsal")
         self.url = "https://providers.bcbsal.org"
         self.user_agent = user_agent
         self.network_requester = None
@@ -97,7 +97,7 @@ class BcBsAlIntegration(Integration):
 
     async def get_coverage_data(
             self, contract_id: str, first_name: str, last_name: str, mid_init: str, dob: str,
-            pre_service_code: str = None
+            preservice_codes: list[str] = None
     ):
         elig_start_page = await self._get_eligibility_page()
         eligibility_soup = self._create_soup(elig_start_page)
@@ -213,7 +213,18 @@ class BcBsAlIntegration(Integration):
         iv_therapy_element = medical_care_soup.select_one("div#Covered-panel-12")
         iv_therapy_coverage = self._parse_insurance_table(iv_therapy_element)
 
-        preservice_data = await self._get_pre_service_data(code=pre_service_code)
+        preservice_data_list = []
+        if preservice_codes is not None:
+            auth_jwt = await self._get_cache_jwt()
+            all_codes = await self._get_pre_service_codes(jwt=auth_jwt)
+
+            for pr_code in preservice_codes:
+                preservice_data = await self._get_pre_service_data(
+                    code=pr_code,
+                    codes_list=all_codes,
+                    jwt=auth_jwt
+                )
+                preservice_data_list.append(preservice_data)
 
         coverage_data = {
             "health_benefit": health_plan_coverage,
@@ -226,9 +237,15 @@ class BcBsAlIntegration(Integration):
 
         result = {
             "coverage": coverage_data,
-            "preservice": preservice_data,
+            "preservice": preservice_data_list,
         }
         return result
+
+    async def get_preservice_codes(self):
+        jwt = await self._get_cache_jwt()
+        all_codes = await self._get_pre_service_codes(jwt=jwt)
+
+        return all_codes
 
     async def _get_cache_jwt(self):
         params = {
@@ -259,13 +276,13 @@ class BcBsAlIntegration(Integration):
         response = await self._make_request("GET", url=path, headers=headers)
         return response
 
-    async def _get_pre_service_data(self, code: str = None):
+    async def _get_pre_service_data(self, code: str = None, jwt: str = None, codes_list: list = None):
         if code is None:
             return None
 
         code = code.upper()
-        jwt_token = await self._get_cache_jwt()
-        preservice_codes = await self._get_pre_service_codes(jwt_token)
+        jwt_token = jwt if jwt is not None else await self._get_cache_jwt()
+        preservice_codes = codes_list if codes_list is not None else await self._get_pre_service_codes(jwt_token)
 
         code_data: dict = next((item for item in preservice_codes if item.get("code") == code), None)
         if code_data is None:
