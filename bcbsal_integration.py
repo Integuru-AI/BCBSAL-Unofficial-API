@@ -59,6 +59,7 @@ class BcBsAlIntegration(Integration):
             return data
 
         if response.status == 401:
+            print(await response.text())
             raise IntegrationAuthError(
                 "BCBSAL: Auth failed",
                 response.status,
@@ -242,6 +243,7 @@ class BcBsAlIntegration(Integration):
         return result
 
     async def get_preservice_codes(self):
+        await self._get_eligibility_page()
         jwt = await self._get_cache_jwt()
         all_codes = await self._get_pre_service_codes(jwt=jwt)
 
